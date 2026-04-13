@@ -1,0 +1,245 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ──────────────────────────────────────────────
+// 用户与认证
+// ──────────────────────────────────────────────
+
+enum UserRole {
+  CUSTOMER
+  ADMIN
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String?
+  image         String?
+  role          UserRole  @default(CUSTOMER)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  accounts      Account[]
+  sessions      Session[]
+  orders        Order[]
+  carts         Cart[]
+
+  @@map("users")
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}
+
+// ──────────────────────────────────────────────
+// 产品
+// ──────────────────────────────────────────────
+
+model Product {
+  id          String   @id @default(cuid())
+  name        String
+  slug        String   @unique
+  description String?  @db.Text
+  price       Int      // 价格，单位：分（cents）存储，避免浮点问题
+  comparePrice Int?    // 原价
+  fobPrice    Int?     // FOB 批发价（分）
+  currency    String   @default("USD")
+
+  // 图片
+  images      String[] // JSON 数组，存放图片 URL
+
+  // 产品属性
+  colors      String[] // 可选颜色
+  sizes       String[] // 可选尺寸
+
+  // 车型适配（JSON 数组存储）
+  vehicleMakes  String[]  // 品牌，如 ["Toyota", "Tesla"]
+  vehicleModels Json?     // 车型数据，结构见下方
+
+  // 功能特性
+  features    Json?   // { thickness?: string, brightness?: string, power?: string ... }
+
+  // 库存
+  stock       Int     @default(0)
+
+  // 状态
+  published   Boolean @default(false)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  orderItems  OrderItem[]
+  cartItems   CartItem[]
+
+  @@map("products")
+}
+
+// 车型数据结构示例
+// {
+//   "Toyota": ["RAV4", "Camry", "Corolla"],
+//   "Tesla": ["Model 3", "Model Y"]
+// }
+
+// ──────────────────────────────────────────────
+// 订单
+// ──────────────────────────────────────────────
+
+enum OrderStatus {
+  PENDING
+  PAID
+  PROCESSING
+  SHIPPED
+  DELIVERED
+  CANCELLED
+  REFUNDED
+}
+
+model Order {
+  id            String      @id @default(cuid())
+  orderNumber   String      @unique
+
+  userId        String?
+  user          User?       @relation(fields: [userId], references: [id])
+
+  status        OrderStatus @default(PENDING)
+
+  // Stripe
+  stripeSessionId String?   @unique
+  stripePaymentIntentId String? @unique
+
+  // 金额
+  total         Int         // 单位：分
+  currency      String      @default("USD")
+
+  // 收货信息
+  shippingName      String?
+  shippingEmail      String?
+  shippingPhone      String?
+  shippingAddress    Json?   // { line1, city, state, postal_code, country }
+  billingAddress     Json?
+
+  // 物流
+  trackingNumber     String?
+  trackingCarrier     String?
+
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  items         OrderItem[]
+
+  @@map("orders")
+}
+
+model OrderItem {
+  id            String  @id @default(cuid())
+  orderId       String
+  order         Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  productId     String
+  product       Product @relation(fields: [productId], references: [id])
+
+  productName  String  // 下单时的快照
+  productImage String? // 下单时的快照
+
+  quantity     Int
+  price        Int     // 下单时的单价（分）
+
+  // 定制选项快照
+  options      Json?   // { color: "white", vehicleModel: "Tesla Model 3" }
+
+  @@map("order_items")
+}
+
+// ──────────────────────────────────────────────
+// 购物车
+// ──────────────────────────────────────────────
+
+model Cart {
+  id        String    @id @default(cuid())
+  userId    String?   @unique
+  user      User?      @relation(fields: [userId], references: [id])
+
+  sessionId String?   @unique // 未登录用户用 session
+
+  updatedAt DateTime  @updatedAt
+  createdAt DateTime   @default(now())
+
+  items     CartItem[]
+
+  @@map("carts")
+}
+
+model CartItem {
+  id        String  @id @default(cuid())
+  cartId    String
+  cart      Cart    @relation(fields: [cartId], references: [id], onDelete: Cascade)
+
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+
+  quantity  Int     @default(1)
+
+  // 定制选项
+  options   Json?   // { color: "white", vehicleModel: "Model 3" }
+
+  @@unique([cartId, productId, options])
+  @@map("cart_items")
+}
+
+// ──────────────────────────────────────────────
+// 邮件订阅
+// ──────────────────────────────────────────────
+
+model Subscriber {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  confirmed Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@map("subscribers")
+}
